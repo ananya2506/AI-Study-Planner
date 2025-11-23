@@ -7,25 +7,23 @@ import plotly.express as px
 # ------------------------------
 #           CONFIG
 # ------------------------------
-st.set_page_config(page_title="AI Study Planner • Pro", layout="wide")
+st.set_page_config(page_title="AI Study Planner • Final", layout="wide")
 
-# Optional logo from uploaded file (local path)
+# Use uploaded image file as logo (local path included)
 logo_path = "/mnt/data/63613500-6316-4b0d-bf04-48e5de9075fb.png"
 try:
-    st.image(logo_path, width=120)
+    st.image(logo_path, width=110)
 except Exception:
-    # image might not exist in some environments
     pass
 
-st.title("📘 AI Study Planner – Professional Edition")
+st.title("📘 AI Study Planner — Final Pro Edition")
 st.markdown(
-    "Generate an optimized study schedule with AI-assisted difficulty detection, "
-    "smart alerts, a productivity score, and a Gantt timeline for visualization."
+    "Optimized, AI-assisted study planner with difficulty detection, priority boosting, "
+    "what-if simulation, smart balancing and an interactive Gantt timeline."
 )
 
-
 # ------------------------------
-#      HELPER / UTILITY FUNCS
+#        HELPER FUNCTIONS
 # ------------------------------
 def format_time(hours):
     """Convert decimal hours to 'X hrs Y mins'."""
@@ -39,316 +37,312 @@ def format_time(hours):
     else:
         return f"{mins} mins"
 
-
 def predict_difficulty(topic):
-    """
-    Simple rule-based difficulty predictor.
-    Returns 'easy', 'medium', or 'hard'.
-    """
+    """Simple rule-based difficulty predictor (fallback if user doesn't provide)."""
     t = topic.lower()
-    # hard keywords
-    hard_kw = [
-        "neural", "deep", "derivative", "proof", "theorem", "optimization",
-        "convergence", "matrix", "bayes", "laplace", "transform", "complex",
-        "differential", "gradient", "regression", "backpropagation", "entropy"
-    ]
-    easy_kw = ["basics", "intro", "foundation", "overview", "introduction", "getting started", "simple"]
+    hard_kw = ["neural", "deep", "derivative", "proof", "theorem", "optimization", "matrix", "bayes", "differential", "gradient", "regression", "entropy", "convergence"]
+    easy_kw = ["basics", "intro", "introduction", "foundation", "overview", "getting started", "simple"]
     medium_kw = ["application", "concept", "practice", "example", "intermediate"]
-
     if any(k in t for k in hard_kw):
         return "hard"
     if any(k in t for k in easy_kw):
         return "easy"
     if any(k in t for k in medium_kw):
         return "medium"
+    # fallback
+    return "medium" if len(t.split()) >= 2 else "easy"
 
-    # fallback: length-based heuristic
-    words = len(t.split())
-    if words >= 3:
-        return "medium"
-    return "easy"
+def allocate_hours(tasks, days, daily_hours):
+    """
+    Allocate hours to tasks proportionally using their (possibly boosted) weight.
+    tasks: list of [subject, topic, diff, base_weight, boost, hours_placeholder]
+    returns tasks with updated hours (float)
+    """
+    # compute combined weight per task = base_weight * boost
+    total_weight = sum([t[3] * t[4] for t in tasks])
+    total_available = days * daily_hours
+    if total_weight == 0:
+        # avoid division by zero
+        for t in tasks:
+            t[5] = 0.0
+        return tasks
+    for t in tasks:
+        t[5] = (t[3] * t[4] / total_weight) * total_available
+    return tasks
 
+def build_day_alloc(tasks, days, daily_hours):
+    """
+    Create day-by-day allocation list (list length == days) of allocated hours.
+    This is a sequential filler that fills each day up to daily_hours before moving forward.
+    Returns day_alloc list and plan dict (day -> list of (subject, topic, diff, allocated_chunk))
+    """
+    plan = {}
+    day_alloc = [0.0 for _ in range(days)]
+    day_index = 0
+    remaining_in_day = daily_hours
+    # iterate tasks in order; prefer scheduling hard topics earlier by sorting externally if needed
+    for sub, topic, diff, base_w, boost, hrs in tasks:
+        remain = hrs
+        while remain > 1e-6:
+            if day_index >= days:
+                # if overflow, append remaining hours to last day
+                day_index = days - 1
+            can_take = min(remain, remaining_in_day)
+            plan.setdefault(day_index + 1, []).append((sub, topic, diff, can_take))
+            day_alloc[day_index] += can_take
+            remaining_in_day -= can_take
+            remain -= can_take
+            if remaining_in_day <= 1e-6:
+                day_index += 1
+                if day_index < days:
+                    remaining_in_day = daily_hours
+    return day_alloc, plan
+
+def rebalance_tasks(tasks, days, daily_hours):
+    """
+    Simple rebalance algorithm:
+    - Sort tasks by difficulty weight descending (hard first)
+    - Re-allocate hours across days greedily to minimize overloaded days
+    """
+    # Create a flattened list of (subject, topic, diff, hours)
+    flat = []
+    for sub, topic, diff, base_w, boost, hrs in tasks:
+        flat.append([sub, topic, diff, base_w * boost, hrs])
+    # sort by weight descending (hardest first)
+    flat.sort(key=lambda x: x[3], reverse=True)
+    # Create new empty day buckets
+    day_buckets = [[] for _ in range(days)]
+    day_loads = [0.0 for _ in range(days)]
+    # greedy: for each topic, try to place chunks across days where they fit, starting earliest
+    for sub, topic, diff, weight, hrs in flat:
+        remaining = hrs
+        day_idx = 0
+        while remaining > 1e-6:
+            # find earliest day with enough space
+            placed = False
+            for d in range(days):
+                space = daily_hours - day_loads[d]
+                if space > 1e-6:
+                    take = min(space, remaining)
+                    day_buckets[d].append((sub, topic, diff, take))
+                    day_loads[d] += take
+                    remaining -= take
+                    placed = True
+                    if remaining <= 1e-6:
+                        break
+            if not placed:
+                # all days full; append to last day as overflow
+                day_buckets[-1].append((sub, topic, diff, remaining))
+                day_loads[-1] += remaining
+                remaining = 0
+    # rebuild plan dict
+    plan = {}
+    for i, bucket in enumerate(day_buckets, start=1):
+        if bucket:
+            plan[i] = bucket
+    return day_loads, plan
 
 # ------------------------------
 #            INPUTS
 # ------------------------------
 st.header("➤ Enter Subjects, Topics & Difficulty")
-
 st.markdown(
-    "Enter each subject on a new line in this format:\n\n"
-    "`Subject: Topic1 (difficulty), Topic2 (difficulty), ...`\n\n"
-    "You can also tick **Auto-detect difficulty** and skip the `(difficulty)` for topics."
+    "Format per line: `Subject: Topic1 (optional_difficulty), Topic2 (optional_difficulty), ...`\n\n"
+    "e.g. `Math: Algebra (hard), Calculus (medium)` or `Python: Basics, OOP (medium)`."
 )
 
-subjects_input = st.text_area(
-    "Example:\nMath: Algebra (hard), Calculus (medium), Trigonometry (easy)\nPython: Basics, OOP (medium), ML (hard)",
-    height=160,
-)
+subjects_input = st.text_area("Subjects & topics", height=160)
 
-col_left, col_right = st.columns(2)
-with col_left:
+left_col, right_col = st.columns(2)
+with left_col:
     days = st.number_input("Days left for exam", min_value=1, value=10)
-    start_date = st.date_input("Plan start date (for timeline)", value=datetime.today().date())
-with col_right:
-    daily_hours = st.number_input("Study hours per day", min_value=1, value=3)
-    auto_detect = st.checkbox("🔍 Auto-detect topic difficulty (recommended)", value=True)
+    start_date = st.date_input("Start date", value=datetime.today().date())
+with right_col:
+    daily_hours = st.number_input("Study hours per day", min_value=1.0, value=3.0, step=0.5)
+    auto_detect = st.checkbox("Auto-detect difficulty (if difficulty not provided)", value=True)
 
-generate = st.button("✨ Generate Study Plan")
+# Generate / simulate controls
+col_gen, col_sim = st.columns([2, 1])
+with col_gen:
+    generate = st.button("✨ Generate Plan")
+with col_sim:
+    st.write("What-if Simulator")
+    sim_days = st.number_input("Simulate days (what-if)", min_value=1, value=days)
+    sim_hours = st.number_input("Simulate hours/day (what-if)", min_value=1.0, value=daily_hours, step=0.5)
+    simulate = st.button("🔁 Simulate What-If")
 
 # ------------------------------
-#       MAIN LOGIC
+#         MAIN WORKFLOW
 # ------------------------------
-if generate:
-    # Parse lines and topics
+if generate or simulate:
+    # parse input
     lines = [ln.strip() for ln in subjects_input.splitlines() if ln.strip()]
-    tasks = []  # tuples: (subject, topic, difficulty, weight, hours_allocated_future)
-
-    diff_weight = {"easy": 1.0, "medium": 2.0, "hard": 3.0}
+    tasks = []  # each element: [subject, topic, diff, base_weight, boost, allocated_hours]
+    base_weights = {"easy": 1.0, "medium": 2.0, "hard": 3.0}
 
     for line in lines:
         if ":" not in line:
             continue
         subject, topics_blob = line.split(":", 1)
-        subjects_topics = [t.strip() for t in topics_blob.split(",") if t.strip()]
-        for raw in subjects_topics:
-            # if user provided difficulty in parentheses, use it
-            if "(" in raw and ")" in raw:
-                topic_name = raw.split("(")[0].strip()
-                diff = raw.split("(")[1].split(")")[0].strip().lower()
-                if diff not in diff_weight:
+        topic_entries = [t.strip() for t in topics_blob.split(",") if t.strip()]
+        for te in topic_entries:
+            if "(" in te and ")" in te:
+                topic_name = te.split("(")[0].strip()
+                diff = te.split("(")[1].split(")")[0].strip().lower()
+                if diff not in base_weights:
                     diff = "medium"
             else:
-                topic_name = raw
-                if auto_detect:
-                    diff = predict_difficulty(topic_name)
-                else:
-                    diff = "medium"
-            weight = diff_weight.get(diff, 1.0)
-            tasks.append([subject.strip(), topic_name.strip(), diff, weight, 0.0])
+                topic_name = te
+                diff = predict_difficulty(topic_name) if auto_detect else "medium"
+            tasks.append([subject.strip(), topic_name.strip(), diff, base_weights.get(diff, 1.0), 1.0, 0.0])
 
-    if len(tasks) == 0:
-        st.error("No topics found. Please follow the input format and try again.")
+    if not tasks:
+        st.error("No topics parsed. Please enter at least one subject/topic following the format.")
         st.stop()
 
-    total_weight = sum([t[3] for t in tasks])
-    total_available_hours = days * daily_hours
+    # Build subject list and show priority sliders for each subject
+    subjects = sorted(list({t[0] for t in tasks}))
+    st.subheader("🔧 Subject Priority Boosts (optional)")
+    st.markdown("Use these sliders to increase priority (and time) for subjects you want to prioritize.")
+    subject_boosts = {}
+    cols = st.columns(min(len(subjects), 4))
+    for i, subject in enumerate(subjects):
+        col = cols[i % len(cols)]
+        # default 1.0; allow up to 2.0x boost
+        subject_boosts[subject] = col.slider(f"{subject} priority", 0.5, 2.0, 1.0, 0.1, key=f"boost_{subject}")
 
-    # Allocate time proportionally to weights (float hours)
-    for row in tasks:
-        allocated = (row[3] / total_weight) * total_available_hours
-        row[4] = allocated  # set hours
+    # apply boosts to each task entry
+    for t in tasks:
+        t[4] = subject_boosts.get(t[0], 1.0)
 
-    # ------------------------------
-    #  Topic-wise table (numbered from 1)
-    # ------------------------------
-    st.subheader("📘 Topic-wise Time Allocation")
+    # choose which (days/hours) to use: real or simulate
+    use_days = sim_days if simulate else days
+    use_daily_hours = sim_hours if simulate else daily_hours
+
+    # allocate hours based on base weight * boost
+    allocate_hours(tasks, use_days, use_daily_hours)
+
+    # Optionally reorder tasks: Hard topics first for earlier scheduling
+    # We'll create a scheduled_tasks list sorted by (weight desc, subject)
+    scheduled_tasks = sorted(tasks, key=lambda x: (x[3] * x[4]), reverse=True)
+
+    # Build topic table (numbered from 1)
+    st.subheader("📘 Topic-wise Allocation")
     topic_rows = []
-    for i, (sub, topic, diff, weight, hrs) in enumerate(tasks, start=1):
-        topic_rows.append([i, sub, topic, diff.capitalize(), format_time(hrs), round(hrs, 2)])
-    df_topics = pd.DataFrame(topic_rows, columns=["No.", "Subject", "Topic", "Difficulty", "Allocated Time", "Hours (decimal)"])
+    for idx, (sub, topic, diff, base_w, boost, hrs) in enumerate(scheduled_tasks, start=1):
+        topic_rows.append([idx, sub, topic, diff.capitalize(), format_time(hrs), round(hrs, 2)])
+    df_topics = pd.DataFrame(topic_rows, columns=["No.", "Subject", "Topic", "Difficulty", "Allocated Time", "Hours(decimal)"])
     df_topics.index = df_topics.index + 1
     st.dataframe(df_topics[["No.", "Subject", "Topic", "Difficulty", "Allocated Time"]], use_container_width=True)
 
-    # ------------------------------
-    #  Subject-wise summary (numbered from 1)
-    # ------------------------------
-    st.subheader("📊 Subject-wise Study Hour Breakdown")
-    subject_summary = {}
-    for sub, topic, diff, weight, hrs in tasks:
-        subject_summary[sub] = subject_summary.get(sub, 0) + hrs
-
+    # Build subject summary table
+    st.subheader("📊 Subject-wise Breakdown")
+    summary = {}
+    for sub, topic, diff, base_w, boost, hrs in scheduled_tasks:
+        summary[sub] = summary.get(sub, 0) + hrs
     summary_rows = []
-    total_allocated = sum(subject_summary.values())
-    for i, (sub, hrs) in enumerate(subject_summary.items(), start=1):
-        pct = 0.0
-        if total_allocated > 0:
-            pct = (hrs / total_allocated) * 100
-        summary_rows.append([i, sub, hrs, format_time(hrs), round(pct, 2)])
+    total_alloc = sum(summary.values())
+    for i, (sub, hrs) in enumerate(summary.items(), start=1):
+        pct = (hrs / total_alloc * 100) if total_alloc > 0 else 0
+        summary_rows.append([i, sub, round(hrs, 2), format_time(hrs), round(pct, 2)])
     df_summary = pd.DataFrame(summary_rows, columns=["No.", "Subject", "Allocated Hours", "Readable Time", "% Weight"])
     df_summary.index = df_summary.index + 1
     st.dataframe(df_summary, use_container_width=True)
 
-    # ------------------------------
-    # Progress / Productivity score
-    # ------------------------------
-    st.subheader("📈 Productivity Score & Quick Stats")
-
-    # Productivity metric (simple but explainable)
-    # score base: normalized weighted-hours-per-day -> scaled 0..100
-    weighted_score = total_weight  # sum of difficulty weights
-    # expected_effort = weighted_score * 1.5  # arbitrary normalization constant
-    # we'll compute score from ratio: total_available_hours vs weighted_score * days
-    effort_need = weighted_score  # proxy
-    # compute an index: (available hours per day) * sqrt(days) * scaling
-    raw_score = (daily_hours * np.sqrt(days)) / (1 + (weighted_score / 3.0))
-    # scale to 0..100
+    # Productivity score & quick stats
+    st.subheader("📈 Productivity Score & Stats")
+    weighted_sum = sum([t[3] * t[4] for t in scheduled_tasks])
+    raw_score = (use_daily_hours * np.sqrt(use_days)) / (1 + (weighted_sum / 4.0))
     prod_score = int(np.clip((raw_score / 2.5) * 100, 0, 100))
-    # small heuristics for labels
-    if prod_score >= 75:
-        label = "Excellent ✅"
-    elif prod_score >= 50:
-        label = "Good 👍"
-    elif prod_score >= 30:
-        label = "Fair 🔶"
-    else:
-        label = "Needs work 🔴"
+    label = "Excellent ✅" if prod_score >= 75 else ("Good 👍" if prod_score >= 50 else ("Fair 🔶" if prod_score >= 30 else "Needs work 🔴"))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Productivity Score", f"{prod_score} / 100", label)
+    c2.metric("Total Topics", len(scheduled_tasks))
+    c3.metric("Total Allocated Hours", f"{round(total_alloc,2)} hrs")
 
-    col_a, col_b, col_c = st.columns([2, 2, 2])
-    col_a.metric("Productivity Score", f"{prod_score} / 100", label)
-    col_b.metric("Total Topics", len(tasks))
-    col_c.metric("Total Allocated Hours", f"{round(total_allocated,2)} hrs")
-
-    # ------------------------------
-    #    Smart Alerts & Recommendations
-    # ------------------------------
+    # Smart alerts — improved: identify real overloaded days
     st.subheader("🧠 Smart Alerts & Recommendations")
-    alerts = []
+    # compute day allocation and plan
+    day_alloc, plan = build_day_alloc(scheduled_tasks, use_days, use_daily_hours)
+    overloaded_days = [(i+1, hrs) for i, hrs in enumerate(day_alloc) if hrs > use_daily_hours + 1e-6]
 
-    # 1. If allocated hours > available hours (should be equal but rounding may differ)
-    if round(total_allocated, 2) > round(total_available_hours, 2) + 0.01:
-        alerts.append("⚠️ Allocated time exceeds available time. Reduce topics or increase daily hours.")
-
-    # 2. If many hard topics
-    hard_count = sum(1 for t in tasks if t[2] == "hard")
-    if hard_count >= 3:
-        alerts.append(f"🔔 You have {hard_count} hard topics — schedule them earlier in the plan.")
-
-    # 3. If daily hours low relative to weighted load
-    avg_weight_per_topic = (total_weight / len(tasks)) if tasks else 0
-    if daily_hours <= 2 and avg_weight_per_topic > 2:
-        alerts.append("⚠️ Daily study hours are low for the difficulty level — consider increasing daily hours.")
-
-    # 4. Check last-day crowding (many hours on final day)
-    # build a quick day allocation to evaluate crowding
-    day_alloc = [0.0 for _ in range(days)]
-    d_idx = 0
-    remaining_in_day = daily_hours
-    for sub, topic, diff, weight, hrs in tasks:
-        remain = hrs
-        while remain > 0 and d_idx < days:
-            take = min(remain, remaining_in_day)
-            day_alloc[d_idx] += take
-            remaining_in_day -= take
-            remain -= take
-            if remaining_in_day <= 1e-6:
-                d_idx += 1
-                if d_idx < days:
-                    remaining_in_day = daily_hours
-    if day_alloc[-1] > daily_hours * 0.6:
-        alerts.append("⚠️ Final day looks crowded. Move some tasks earlier or increase days/hours.")
-
-    # 5. If any single day > daily_hours (overflow due to rounding), warn
-    if max(day_alloc) > daily_hours + 0.01:
-        alerts.append("⚠️ Some days exceed daily available hours after allocation — check distribution.")
-
-    if not alerts:
-        st.success("No critical alerts — your plan looks feasible ✅")
+    if overloaded_days:
+        for d, hrs in overloaded_days:
+            st.warning(f"⚠️ Day {d} is overloaded: {format_time(hrs)} (limit: {format_time(use_daily_hours)})")
+        st.markdown("You can click **Auto-balance schedule** to try to distribute tasks more evenly across days.")
+        if st.button("🔧 Auto-balance schedule"):
+            # perform rebalance
+            new_day_loads, new_plan = rebalance_tasks(scheduled_tasks, use_days, use_daily_hours)
+            day_alloc = new_day_loads
+            plan = new_plan
+            overloaded_days = [(i+1, hrs) for i, hrs in enumerate(day_alloc) if hrs > use_daily_hours + 1e-6]
+            if not overloaded_days:
+                st.success("✅ Rebalance successful — no overloaded days.")
+            else:
+                for d, hrs in overloaded_days:
+                    st.warning(f"⚠️ After rebalance Day {d} still overloaded: {format_time(hrs)}")
     else:
-        for a in alerts:
-            st.warning(a)
+        st.success("✅ No overloaded days detected — schedule looks balanced.")
 
-    # Provide friendly suggestions (ranked)
+    # friendly suggestions
     st.markdown("**Suggested actions:**")
     suggestions = []
-    suggestions.append("• Start with hard topics in the first 40% of your schedule.")
-    suggestions.append("• Use active recall + spaced repetition for hard topics.")
-    suggestions.append("• If overloaded, remove or postpone low-weight topics.")
+    if any(t[2] == "hard" for t in scheduled_tasks):
+        suggestions.append("• Start hard topics early (first 30–40% of schedule).")
+    suggestions.append("• Use active recall and spaced repetition for hard topics.")
+    suggestions.append("• If overloaded, try increasing daily hours or extending days (use What-if).")
     for s in suggestions:
         st.write(s)
 
-    # ------------------------------
-    #     Build Detailed Day-by-Day Plan & Gantt items
-    # ------------------------------
-    st.subheader("📅 Day-by-Day Plan (detailed) & Gantt Timeline")
+    # Build detailed day-by-day text plan and Gantt rows
+    st.subheader("📅 Day-by-Day Plan & Timeline")
+    baseline = datetime.combine(start_date, datetime.min.time())  # midnight of start date
+    # We'll set study day start at 9:00 AM for timeline aesthetics
+    day_start_hour = 9
 
-    plan = {}  # day -> list of human lines
-    gantt_rows = []  # for Plotly: dicts with Task, Start, Finish, Topic
-    day = 0
-    hours_left = daily_hours
-    # We'll use start_date as the day-0 baseline; within-day we track hours as timestamps
-    baseline = datetime.combine(start_date, datetime.min.time())
+    gantt_rows = []
+    for day_num in sorted(plan.keys()):
+        st.markdown(f"**Day {day_num} — {(baseline + timedelta(days=day_num-1)).strftime('%Y-%m-%d')}**")
+        for (sub, topic, diff, hrs) in plan[day_num]:
+            st.write(f"• {sub} — {topic} ({diff}) → {format_time(hrs)}")
+            start_dt = baseline + timedelta(days=day_num-1, hours=day_start_hour)
+            # compute start offset from previous tasks scheduled on same day
+            # compute how many hours already scheduled earlier this day
+            already = sum([r[3] for r in plan[day_num] if r is not None and r != (sub, topic, diff, hrs)])  # not ideal but used only for rough timeline
+            # For better timeline ordering, we recreate with cumulative offsets:
+    # Recreate gantt with cumulative offsets per day for correct start times
+    gantt_rows = []
+    for day_num in sorted(plan.keys()):
+        cum = 0.0
+        for (sub, topic, diff, hrs) in plan[day_num]:
+            start_dt = baseline + timedelta(days=day_num-1, hours=day_start_hour + cum)
+            end_dt = start_dt + timedelta(hours=hrs)
+            gantt_rows.append({"Subject": sub, "Task": f"{topic} ({diff})", "Start": start_dt, "Finish": end_dt, "Hours": round(hrs,2)})
+            cum += hrs
 
-    # track time cursor per day as hours from midnight
-    day_cursor_hours = 9.0  # study start hour (9:00 AM) - aesthetic choice
-    for sub, topic, diff, weight, hrs in tasks:
-        remaining = hrs
-        while remaining > 0:
-            if day >= days:
-                # overflow beyond available days — append to last day
-                day = days - 1
-            # how many hours we can allocate in the current day
-            possible = min(remaining, daily_hours - (day_cursor_hours - 9.0))
-            if possible <= 0.0:
-                # move to next day
-                day += 1
-                day_cursor_hours = 9.0
-                continue
-
-            # record plan text
-            hh = possible
-            text = f"{sub} – {topic} ({diff}) → {format_time(hh)}"
-            plan.setdefault(day + 1, []).append(text)
-
-            # Gantt: start = baseline + day days + day_cursor_hours hours
-            start_dt = baseline + timedelta(days=day, hours=day_cursor_hours)
-            end_dt = start_dt + timedelta(hours=hh)
-            gantt_rows.append({
-                "Subject": sub,
-                "Task": f"{topic} ({diff})",
-                "Start": start_dt,
-                "Finish": end_dt,
-                "Hours": hh,
-            })
-
-            # advance cursor
-            day_cursor_hours += hh
-            # if day_cursor_hours reaches study window, move to next day
-            if (day_cursor_hours - 9.0) >= daily_hours - 1e-6:
-                day += 1
-                day_cursor_hours = 9.0
-
-            remaining -= possible
-
-    # Display day-by-day
-    for d in sorted(plan.keys()):
-        st.markdown(f"**Day {d} — { (baseline + timedelta(days=d-1)).strftime('%Y-%m-%d')}**")
-        for item in plan[d]:
-            st.write("• " + item)
-
-    # ------------------------------
-    #    GANTT / TIMELINE PLOT
-    # ------------------------------
-    if len(gantt_rows) > 0:
+    # Plot Gantt timeline
+    if gantt_rows:
         df_gantt = pd.DataFrame(gantt_rows)
-        # Plotly timeline
-        fig = px.timeline(
-            df_gantt,
-            x_start="Start",
-            x_end="Finish",
-            y="Subject",
-            color="Subject",
-            hover_data=["Task", "Hours"]
-        )
-        fig.update_yaxes(autorange="reversed")  # show top-down
-        fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+        fig = px.timeline(df_gantt, x_start="Start", x_end="Finish", y="Subject", color="Subject", hover_data=["Task","Hours"])
+        fig.update_yaxes(autorange="reversed")
+        fig.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20))
         st.plotly_chart(fig, use_container_width=True)
 
     # ------------------------------
-    #    DOWNLOAD / EXPORT
+    #    EXPORT / DOWNLOAD OPTIONS
     # ------------------------------
-    st.subheader("⬇️ Export Plan")
-    # CSV of topics
-    export_topics = df_topics.copy()
-    export_topics = export_topics.drop(columns=["Hours (decimal)"])
-    csv = export_topics.to_csv(index=False)
-    st.download_button("Download topic allocation CSV", csv, file_name="study_topics.csv", mime="text/csv")
+    st.subheader("⬇️ Export Plan & Data")
+    export_topics = df_topics[["Subject", "Topic", "Difficulty", "Allocated Time", "Hours(decimal)"]].copy()
+    st.download_button("Download topic allocation CSV", export_topics.to_csv(index=False), file_name="study_topics.csv", mime="text/csv")
 
-    # CSV of gantt rows
-    if len(gantt_rows) > 0:
-        df_gantt_export = df_gantt.copy()
-        # convert datetimes to ISO strings
+    if gantt_rows:
+        df_gantt_export = pd.DataFrame(gantt_rows)
         df_gantt_export["Start"] = df_gantt_export["Start"].apply(lambda x: x.isoformat())
         df_gantt_export["Finish"] = df_gantt_export["Finish"].apply(lambda x: x.isoformat())
         st.download_button("Download timeline CSV", df_gantt_export.to_csv(index=False), file_name="study_timeline.csv", mime="text/csv")
 
-   
+    # Resume-ready description
+    st.subheader("📝 One-line Project Summary (for resume/interview)")
+    st.code("AI Study Planner — Difficulty-weighted time allocation, AI topic difficulty detection, priority boosting, what-if simulation, auto-balance, and interactive Gantt timeline. Built with Streamlit, pandas, numpy and Plotly.")
+
+    st.success("Plan ready — try What-If simulator, adjust priorities, or auto-balance to refine.")
