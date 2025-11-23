@@ -351,12 +351,4 @@ if generate:
         df_gantt_export["Finish"] = df_gantt_export["Finish"].apply(lambda x: x.isoformat())
         st.download_button("Download timeline CSV", df_gantt_export.to_csv(index=False), file_name="study_timeline.csv", mime="text/csv")
 
-    # quick resume text to copy-paste
-    st.subheader("📝 Short Project Summary (for resume/interview)")
-    st.code(
-        "AI Study Planner — Generates an optimized study schedule using difficulty-weighted "
-        "time allocation, AI-based topic difficulty prediction, smart alerts, productivity scoring, "
-        "and an interactive Gantt timeline. Built with Streamlit, pandas and Plotly."
-    )
-
-    st.success("Plan generated. Use the exported CSV or the Gantt timeline for a polished demo in interviews.")
+   
