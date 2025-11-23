@@ -83,48 +83,64 @@ if generate:
         tasks[i] += (allocated,)
 
 
-    # --------------------------------------------------------
-    #         TOPIC-WISE TIME ALLOCATION TABLE
-    # --------------------------------------------------------
-    st.header("📘 Topic-wise Time Allocation")
+   # --------------------------------------------------------
+#         TOPIC-WISE TIME ALLOCATION TABLE
+# --------------------------------------------------------
+st.header("📘 Topic-wise Time Allocation")
 
-    topic_data = []
-    for t in tasks:
-        subject, chapter, diff, weight, hrs = t
-        topic_data.append([
-            subject,
-            chapter,
-            diff.capitalize(),
-            format_time(hrs)
-        ])
+topic_data = []
+for idx, t in enumerate(tasks, start=1):   # numbering starts from 1
+    subject, chapter, diff, weight, hrs = t
+    topic_data.append([
+        idx,                                  # row number
+        subject,
+        chapter,
+        diff.capitalize(),
+        format_time(hrs)
+    ])
 
-    df_topics = pd.DataFrame(topic_data, columns=["Subject", "Topic", "Difficulty", "Allocated Time"])
-    st.dataframe(df_topics, use_container_width=True)
+df_topics = pd.DataFrame(
+    topic_data,
+    columns=["No.", "Subject", "Topic", "Difficulty", "Allocated Time"]
+)
+
+# Reset index (optional)
+df_topics.index = df_topics.index + 1
+
+st.dataframe(df_topics, use_container_width=True)
 
 
-    # --------------------------------------------------------
-    #          SUBJECT-WISE SUMMARY TABLE
-    # --------------------------------------------------------
-    st.header("📊 Subject-wise Study Hour Breakdown")
 
-    subject_summary = {}
-    for t in tasks:
-        sub, chap, diff, weight, hrs = t
-        subject_summary[sub] = subject_summary.get(sub, 0) + hrs
+# --------------------------------------------------------
+#          SUBJECT-WISE SUMMARY TABLE
+# --------------------------------------------------------
+st.header("📊 Subject-wise Study Hour Breakdown")
 
-    df_summary = pd.DataFrame(
-        {
-            "Subject": list(subject_summary.keys()),
-            "Allocated Hours": list(subject_summary.values()),
-        }
-    )
+subject_summary = {}
+for t in tasks:
+    sub, chap, diff, weight, hrs = t
+    subject_summary[sub] = subject_summary.get(sub, 0) + hrs
 
-    df_summary["Readable Time"] = df_summary["Allocated Hours"].apply(format_time)
-    df_summary["% Weight"] = (
-        df_summary["Allocated Hours"] / df_summary["Allocated Hours"].sum() * 100
-    ).round(2)
+summary_data = []
+for idx, (sub, hrs) in enumerate(subject_summary.items(), start=1):
+    summary_data.append([
+        idx,
+        sub,
+        hrs,
+        format_time(hrs),
+        round((hrs / sum(subject_summary.values())) * 100, 2)
+    ])
 
-    st.dataframe(df_summary, use_container_width=True)
+df_summary = pd.DataFrame(
+    summary_data,
+    columns=["No.", "Subject", "Allocated Hours", "Readable Time", "% Weight"]
+)
+
+# Reset index to start from 1
+df_summary.index = df_summary.index + 1
+
+st.dataframe(df_summary, use_container_width=True)
+
 
 
     # --------------------------------------------------------
