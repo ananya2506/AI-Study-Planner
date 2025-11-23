@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import math
 import numpy as np
+st.image("logo.png", width=120)
 
 # --------------------------------------------------------
 #                PAGE SETUP
