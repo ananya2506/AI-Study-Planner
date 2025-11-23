@@ -1,38 +1,20 @@
 import streamlit as st
 import pandas as pd
 
-# --------------------------------------------------------
-#                   PAGE TITLE
-# --------------------------------------------------------
+# ------------------------------
+#        PAGE TITLE
+# ------------------------------
 st.set_page_config(page_title="AI Study Planner", layout="centered")
-st.title("📘 AI Study Planner – Smart Exam Preparation Assistant")
-
+st.title("📘 AI Study Planner – Smart Exam Preparation")
 st.write(
-    "This AI-powered tool generates an optimized, personalized study plan "
-    "based on workload, topic difficulty, and your available study hours."
+    "This AI-powered planner creates a personalized, optimized study schedule "
+    "based on subject difficulty, workload, and your available study hours."
 )
 
-# --------------------------------------------------------
-#                  TIME FORMAT FUNCTION
-# --------------------------------------------------------
-def format_time(hours):
-    """Convert decimal hours to 'X hrs Y mins'."""
-    total_minutes = int(hours * 60)
-    hrs = total_minutes // 60
-    mins = total_minutes % 60
-
-    if hrs > 0 and mins > 0:
-        return f"{hrs} hrs {mins} mins"
-    elif hrs > 0:
-        return f"{hrs} hrs"
-    else:
-        return f"{mins} mins"
-
-
-# --------------------------------------------------------
-#                   INPUT SECTION
-# --------------------------------------------------------
-st.header("➤ Enter Subjects, Topics & Difficulty")
+# ------------------------------
+#        INPUT SECTION
+# ------------------------------
+st.header("➤ Enter Your Subjects, Chapters & Difficulty")
 
 subjects_input = st.text_area(
     "Format: Subject: Topic (easy/medium/hard), Topic (difficulty)...",
@@ -49,10 +31,21 @@ daily_hours = col2.number_input("Study hours per day", min_value=1, value=3)
 
 generate = st.button("✨ Generate Study Plan")
 
+# ------------------------------
+#         HELPER FUNCTION
+# ------------------------------
+def format_time(hours):
+    h = int(hours)
+    m = round((hours - h) * 60)
+    if m == 0:
+        return f"{h} hr"
+    if h == 0:
+        return f"{m} min"
+    return f"{h} hr {m} min"
 
-# --------------------------------------------------------
-#                  PROCESSING LOGIC
-# --------------------------------------------------------
+# ------------------------------
+#         PROCESSING LOGIC
+# ------------------------------
 if generate:
 
     lines = subjects_input.strip().split("\n")
@@ -60,7 +53,7 @@ if generate:
 
     diff_weight = {"easy": 1, "medium": 2, "hard": 3}
 
-    # Parse input
+    # Parse subjects & topics
     for line in lines:
         if ":" in line:
             subject, topics = line.split(":")
@@ -77,139 +70,131 @@ if generate:
     total_weight = sum([t[3] for t in tasks])
     total_hours = days * daily_hours
 
-    # Assign time based on difficulty weight
+    # Allocate proportional hours
     for i in range(len(tasks)):
-        allocated = (tasks[i][3] / total_weight) * total_hours
+        allocated = round((tasks[i][3] / total_weight) * total_hours, 2)
         tasks[i] += (allocated,)
 
+    # --------------------------------------------------------
+    #         TOPIC-WISE TIME ALLOCATION TABLE
+    # --------------------------------------------------------
+    st.header("📘 Topic-wise Time Allocation")
 
-   # --------------------------------------------------------
-#         TOPIC-WISE TIME ALLOCATION TABLE
-# --------------------------------------------------------
-st.header("📘 Topic-wise Time Allocation")
+    topic_data = []
+    for idx, t in enumerate(tasks, start=1):
+        subject, chapter, diff, weight, hrs = t
+        topic_data.append([
+            idx,
+            subject,
+            chapter,
+            diff.capitalize(),
+            format_time(hrs)
+        ])
 
-topic_data = []
-for idx, t in enumerate(tasks, start=1):   # numbering starts from 1
-    subject, chapter, diff, weight, hrs = t
-    topic_data.append([
-        idx,                                  # row number
-        subject,
-        chapter,
-        diff.capitalize(),
-        format_time(hrs)
-    ])
+    df_topics = pd.DataFrame(
+        topic_data,
+        columns=["No.", "Subject", "Topic", "Difficulty", "Allocated Time"]
+    )
 
-df_topics = pd.DataFrame(
-    topic_data,
-    columns=["No.", "Subject", "Topic", "Difficulty", "Allocated Time"]
-)
-
-# Reset index (optional)
-df_topics.index = df_topics.index + 1
-
-st.dataframe(df_topics, use_container_width=True)
-
-
-
-# --------------------------------------------------------
-#          SUBJECT-WISE SUMMARY TABLE
-# --------------------------------------------------------
-st.header("📊 Subject-wise Study Hour Breakdown")
-
-subject_summary = {}
-for t in tasks:
-    sub, chap, diff, weight, hrs = t
-    subject_summary[sub] = subject_summary.get(sub, 0) + hrs
-
-summary_data = []
-for idx, (sub, hrs) in enumerate(subject_summary.items(), start=1):
-    summary_data.append([
-        idx,
-        sub,
-        hrs,
-        format_time(hrs),
-        round((hrs / sum(subject_summary.values())) * 100, 2)
-    ])
-
-df_summary = pd.DataFrame(
-    summary_data,
-    columns=["No.", "Subject", "Allocated Hours", "Readable Time", "% Weight"]
-)
-
-# Reset index to start from 1
-df_summary.index = df_summary.index + 1
-
-st.dataframe(df_summary, use_container_width=True)
-
-
+    df_topics.index = df_topics.index + 1
+    st.dataframe(df_topics, use_container_width=True)
 
     # --------------------------------------------------------
-    #             AI INSIGHTS SECTION
+    #          SUBJECT-WISE SUMMARY TABLE
     # --------------------------------------------------------
+    st.header("📊 Subject-wise Study Hour Breakdown")
+
+    subject_summary = {}
+    for t in tasks:
+        sub, chap, diff, weight, hrs = t
+        subject_summary[sub] = subject_summary.get(sub, 0) + hrs
+
+    summary_data = []
+    for idx, (sub, hrs) in enumerate(subject_summary.items(), start=1):
+        summary_data.append([
+            idx,
+            sub,
+            hrs,
+            format_time(hrs),
+            round((hrs / sum(subject_summary.values())) * 100, 2)
+        ])
+
+    df_summary = pd.DataFrame(
+        summary_data,
+        columns=["No.", "Subject", "Allocated Hours", "Readable Time", "% Weight"]
+    )
+
+    df_summary.index = df_summary.index + 1
+    st.dataframe(df_summary, use_container_width=True)
+
+    # ------------------------------
+    #     AI INSIGHTS
+    # ------------------------------
     st.header("🧠 AI Insights & Recommendations")
 
     insights = []
 
-    # Top workload subject
+    # 1. Heaviest subject
     max_sub = df_summary.loc[df_summary["Allocated Hours"].idxmax(), "Subject"]
-    insights.append(f"• Focus more on **{max_sub}**, it has the highest workload.")
+    insights.append(f"• You must focus more on **{max_sub}**, it has the highest workload.")
 
-    # Many hard topics
-    hard_topics = [t for t in tasks if t[2] == "hard"]
-    if len(hard_topics) >= 3:
-        insights.append(f"• You have **{len(hard_topics)} hard topics** — start them earlier.")
+    # 2. Suggest more hours if load extremely high
+    avg_load = total_weight / len(df_summary)
+    if daily_hours < 3 and avg_load > 2.2:
+        insights.append(
+            "• Your study hours per day seem low for the difficulty load. "
+            "Try increasing daily hours for better results."
+        )
 
-    # Low daily hours
-    if daily_hours <= 2:
-        insights.append("• Your daily study hours are low. Increase them for better preparation.")
+    # 3. Balanced check
+    if df_summary["Allocated Hours"].max() - df_summary["Allocated Hours"].min() < 2:
+        insights.append("• Your workload is evenly distributed — great balance!")
 
-    # Even distribution
-    if df_summary["Allocated Hours"].max() - df_summary["Allocated Hours"].min() < 1.5:
-        insights.append("• Your subjects are evenly balanced — great job!")
+    # 4. Hard topics
+    hard_topics_count = len([t for t in tasks if t[2] == "hard"])
+    if hard_topics_count >= 3:
+        insights.append(
+            f"• You have **{hard_topics_count} hard topics**. Focus on them first."
+        )
 
     for ins in insights:
         st.write(ins)
 
-
-    # --------------------------------------------------------
-    #           DAY-BY-DAY DETAILED STUDY PLAN
-    # --------------------------------------------------------
-    st.header("📅 Day-by-Day Study Plan")
+    # ------------------------------
+    #      DAY-BY-DAY PLAN
+    # ------------------------------
+    st.header("📅 Detailed Day-by-Day Study Plan")
 
     plan = {}
     day = 1
     hours_left = daily_hours
 
     for task in tasks:
-        sub, chap, diff, weight, hrs = task
+        sub, chap, diff, w, hrs = task
         remaining = hrs
 
         while remaining > 0:
             if day not in plan:
                 plan[day] = []
 
-            if hours_left <= 0:
+            if hours_left == 0:
                 day += 1
                 hours_left = daily_hours
                 plan[day] = []
 
             allocate = min(remaining, hours_left)
-            plan[day].append(
-                f"{sub} – {chap} ({diff}) → {format_time(allocate)}"
-            )
+            plan[day].append(f"{sub} – {chap} ({diff}) → {format_time(allocate)}")
             hours_left -= allocate
             remaining -= allocate
 
-    # Display the plan
     for d in plan:
         st.subheader(f"Day {d}")
         for item in plan[d]:
             st.write("• " + item)
 
-
-    # --------------------------------------------------------
-    #                 DOWNLOAD BUTTON
-    # --------------------------------------------------------
+    # ------------------------------
+    #     DOWNLOAD PLAN BUTTON
+    # ------------------------------
     output_text = "AI Study Plan\n\n"
     for d in plan:
         output_text += f"Day {d}\n"
